@@ -1,0 +1,5 @@
+build/
+devel/
+thirldparty/thirdparty/Sophus/build/
+src/S-FAST_LIO/.idea
+src/S-FAST_LIO/cmake-build-debug

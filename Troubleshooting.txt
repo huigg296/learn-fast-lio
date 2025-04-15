@@ -1,0 +1,9 @@
+1. Sopus安装问题：https://github.com/zlwang7/S-FAST_LIO/issues/9
+2. 改用 livox_ros_driver2，修改S-FAST_LIO的CMakeLists.txt即可
+3. 可能要给S-FAST_LIO的CMakeLists.txt中加上visualization_msgs依赖
+
+常用指令
+catkin_make --pkg livox_ros_driver2 -DROS_EDITION=ROS1
+catkin_make --pkg sfast_lio
+
+
