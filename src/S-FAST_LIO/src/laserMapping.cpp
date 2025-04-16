@@ -611,7 +611,7 @@ int main(int argc, char **argv)
     downSizeFilterSurf.setLeafSize(filter_size_surf_min, filter_size_surf_min, filter_size_surf_min); // voxel filter
     downSizeFilterMap.setLeafSize(filter_size_map_min, filter_size_map_min, filter_size_map_min); // voxel filter
 
-    shared_ptr<ImuProcess> p_imu1(new ImuProcess());
+    shared_ptr<ImuProcess> p_imu1(new ImuProcess(nh));
     Lidar_T_wrt_IMU << VEC_FROM_ARRAY(extrinT);
     Lidar_R_wrt_IMU << MAT_FROM_ARRAY(extrinR);
     p_imu1->set_param(Lidar_T_wrt_IMU, Lidar_R_wrt_IMU, V3D(gyr_cov, gyr_cov, gyr_cov), V3D(acc_cov, acc_cov, acc_cov),
@@ -699,7 +699,7 @@ int main(int argc, char **argv)
             pos_lid = state_point.pos + state_point.rot.matrix() * state_point.offset_T_L_I;
 
             /******* Publish odometry *******/
-            publish_odometry(pubOdomAftMapped);
+            // publish_odometry(pubOdomAftMapped);
 
             /*** add the feature points to map kdtree ***/
             feats_down_world->resize(feats_down_size);

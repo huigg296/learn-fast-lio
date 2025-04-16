@@ -32,14 +32,15 @@ IMU数据预处理：IMU初始化，IMU正向传播，反向传播补偿运动�
 
 #define MAX_INI_COUNT (10)  //最大迭代次数
 //判断点的时间先后顺序(注意curvature中存储的是时间戳)
-const bool time_list(PointType &x, PointType &y) {return (x.curvature < y.curvature);};
+const bool time_list(PointType &x, PointType &y) {
+  return (x.curvature < y.curvature);};
 
 class ImuProcess
 {
  public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
-  ImuProcess();
+  ImuProcess(const ros::NodeHandle &nh);
   ~ImuProcess();
   
   void Reset();
@@ -67,6 +68,7 @@ class ImuProcess
  private:
   void IMU_init(const MeasureGroup &meas, esekfom::esekf &kf_state, int &N);
   void UndistortPcl(const MeasureGroup &meas, esekfom::esekf &kf_state, PointCloudXYZI &pcl_in_out);
+  void PublishOdometry(const state_ikfom &state_point, const ros::Time &timestamp);
 
   PointCloudXYZI::Ptr cur_pcl_un_;        //当前帧点云未去畸变
   sensor_msgs::ImuConstPtr last_imu_;     // 上一帧imu
@@ -74,7 +76,7 @@ class ImuProcess
   M3D Lidar_R_wrt_IMU;                    // lidar到IMU的旋转外参
   V3D Lidar_T_wrt_IMU;                    // lidar到IMU的平移外参
   V3D mean_acc;                           //加速度均值,用于计算方差
-  V3D mean_gyr;                           //角速度均值，用于计算方差
+  V3D mean_gyr; //角速度均值，用于计算方差
   V3D angvel_last;                        //上一帧角速度
   V3D acc_s_last;                         //上一帧加速度
   double start_timestamp_;                //开始时间戳
@@ -82,10 +84,14 @@ class ImuProcess
   int init_iter_num = 1;                  //初始化迭代次数
   bool b_first_frame_ = true;             //是否是第一帧
   bool imu_need_init_ = true;             //是否需要初始化imu
+
+  ros::NodeHandle nh_;
+  ros::Publisher pubOdom;
+  tf::TransformBroadcaster br;
 };
 
-ImuProcess::ImuProcess()
-    : b_first_frame_(true), imu_need_init_(true), start_timestamp_(-1)
+ImuProcess::ImuProcess(const ros::NodeHandle &nh)
+    : b_first_frame_(true), imu_need_init_(true), start_timestamp_(-1), nh_(nh)
 {
   init_iter_num = 1;                          //初始化迭代次数
   Q = process_noise_cov();                    //调用use-ikfom.hpp里面的process_noise_cov初始化噪声协方差
@@ -99,6 +105,8 @@ ImuProcess::ImuProcess()
   Lidar_T_wrt_IMU = Zero3d;                   // lidar到IMU的位置外参初始化
   Lidar_R_wrt_IMU = Eye3d;                    // lidar到IMU的旋转外参初始化
   last_imu_.reset(new sensor_msgs::Imu());    //上一帧imu初始化
+
+  pubOdom = nh_.advertise<nav_msgs::Odometry>("/Odometry", 100000);
 }
 
 ImuProcess::~ImuProcess() {}
@@ -257,6 +265,8 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf &kf_state
     kf_state.predict(dt, Q, in);    // IMU前向传播，每次传播的时间间隔为dt
 
     imu_state = kf_state.get_x();   //更新IMU状态为积分后的状态
+    PublishOdometry(imu_state, tail->header.stamp);    // 发布里程计
+
     //更新上一帧角速度 = 后一帧角速度-bias  
     angvel_last = V3D(tail->angular_velocity.x, tail->angular_velocity.y, tail->angular_velocity.z) - imu_state.bg;
     //更新上一帧世界坐标系下的加速度 = R*(加速度-bias) - g
@@ -280,7 +290,8 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, esekfom::esekf &kf_state
   last_lidar_end_time_ = pcl_end_time;      //保存这一帧最后一个雷达测量的结束时间，以便于下一帧使用
 
    /***消除每个激光雷达点的失真（反向传播）***/
-  if (pcl_out.points.begin() == pcl_out.points.end()) return;
+  if (pcl_out.points.begin() == pcl_out.points.end())
+    return;
   auto it_pcl = pcl_out.points.end() - 1;
 
   //遍历每个IMU帧
@@ -362,4 +373,38 @@ void ImuProcess::Process(const MeasureGroup &meas, esekfom::esekf &kf_state, Poi
 
   // T2 = omp_get_wtime();
   // cout<<"[ IMU Process ]: Time: "<<T2 - T1<<endl;
+}
+
+
+inline void ImuProcess::PublishOdometry(const state_ikfom &state_point, const ros::Time &timestamp)
+{
+  nav_msgs::Odometry odom;
+  odom.header.stamp = timestamp;
+  odom.header.frame_id = "camera_init";
+  odom.child_frame_id = "body";
+
+  odom.pose.pose.position.x = state_point.pos(0);
+  odom.pose.pose.position.y = state_point.pos(1);
+  odom.pose.pose.position.z = state_point.pos(2);
+
+  Eigen::Quaterniond q(state_point.rot.matrix());
+  odom.pose.pose.orientation.x = q.x();
+  odom.pose.pose.orientation.y = q.y();
+  odom.pose.pose.orientation.z = q.z();
+  odom.pose.pose.orientation.w = q.w();
+
+  tf::Transform transform;
+  tf::Quaternion q_tf;
+  transform.setOrigin(tf::Vector3(odom.pose.pose.position.x,
+                                   odom.pose.pose.position.y,
+                                   odom.pose.pose.position.z));
+  q_tf.setX(odom.pose.pose.orientation.x);
+  q_tf.setY(odom.pose.pose.orientation.y);
+  q_tf.setZ(odom.pose.pose.orientation.z);
+  q_tf.setW(odom.pose.pose.orientation.w);
+  transform.setRotation(q_tf);
+
+  pubOdom.publish(odom);
+  br.sendTransform(tf::StampedTransform(transform, timestamp, "camera_init", "body"));
+  std::cout << "[ IMU Process ]: Publish Odom Time: " << (ros::Time::now() - timestamp).toSec() << std::endl;
 }
